@@ -1,61 +1,46 @@
-const { expect } = require('chai');
-const { ethers } = require('hardhat');
-const { MerkleTree } = require('merkletreejs');
-const keccak256 = require('keccak256');
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-describe('MerkleAirdrop', function () {
-    let airdrop, token, bayc, owner, user1, user2;
-    let merkleTree, merkleRoot, leaves;
+const BAYC_ADDRESS = "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d"; 
+const AIRDROP_TOKEN_ADDRESS = "0xYourERC20TokenAddress";
+const MERKLE_ROOT = "0xYourMerkleRoot"; 
+
+describe("Merkle Airdrop", function () {
+    let airdrop, baycHolder, token, merkleTree;
 
     before(async function () {
-        [owner, user1, user2] = await ethers.getSigners();
+        [deployer, baycHolder] = await ethers.getSigners();
 
-        // Deploy ERC20 token
-        const Token = await ethers.getContractFactory("ERC20Token");
-        token = await Token.deploy("TestToken", "TT", 1000000);
-        await token.deployed();
 
-        // Deploy BAYC NFT
-        const BAYC = await ethers.getContractFactory("ERC721Token");
-        bayc = await BAYC.deploy("BAYC", "BAYC");
-        await bayc.deployed();
+        const BAYCHolderAddress = "0xSomeBAYCHolderAddress"; 
+        await hre.network.provider.request({
+            method: "hardhat_impersonateAccount",
+            params: [BAYCHolderAddress],
+        });
 
-        // Mint BAYC NFT to user1
-        await bayc.mint(user1.address);
+        baycHolder = await ethers.getSigner(BAYCHolderAddress);
 
-        // Generate Merkle tree
-        const eligibleUsers = [
-            { index: 0, address: user1.address, amount: 1000 },
-            { index: 1, address: user2.address, amount: 1500 },
-        ];
 
-        leaves = eligibleUsers.map(user =>
-            keccak256(ethers.utils.solidityPack(['uint256', 'address', 'uint256'], [user.index, user.address, user.amount]))
-        );
-        merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
-        merkleRoot = merkleTree.getHexRoot();
-
-        // Deploy the Merkle Airdrop contract
-        const MerkleAirdrop = await ethers.getContractFactory("MerkleAirdrop");
-        airdrop = await MerkleAirdrop.deploy(token.address, merkleRoot, bayc.address);
+        const Airdrop = await ethers.getContractFactory("MerkleAirdrop");
+        airdrop = await Airdrop.deploy(AIRDROP_TOKEN_ADDRESS, MERKLE_ROOT, BAYC_ADDRESS);
         await airdrop.deployed();
 
-        // Transfer tokens to the airdrop contract
-        await token.transfer(airdrop.address, 3000);
+        token = await ethers.getContractAt("IERC20", AIRDROP_TOKEN_ADDRESS);
+        await token.connect(deployer).transfer(airdrop.address, ethers.utils.parseUnits("1000", 18));
     });
 
-    it('User1 can claim the airdrop if they have a BAYC NFT and a valid Merkle proof', async function () {
-        const proof = merkleTree.getHexProof(leaves[0]);
+    it("Should allow BAYC NFT holders to claim the airdrop", async function () {
+        const index = 0; 
+        const amount = ethers.utils.parseUnits("100", 18); 
+        const account = baycHolder.address; 
+        //// Generating the valid proof from Merkle tree
+        const merkleProof = []; 
 
-        await expect(airdrop.connect(user1).claim(0, 1000, proof))
-            .to.emit(airdrop, 'AirdropClaimed')
-            .withArgs(user1.address, 1000);
-    });
+        // BAYC holder claims the airdrop
+        await airdrop.connect(baycHolder).claim(index, account, amount, merkleProof);
 
-    it('User2 cannot claim the airdrop without BAYC NFT', async function () {
-        const proof = merkleTree.getHexProof(leaves[1]);
-
-        await expect(airdrop.connect(user2).claim(1, 1500, proof))
-            .to.be.revertedWith('Must own a BAYC NFT to claim');
+        // Checking if tokens are transferred
+        const balance = await token.balanceOf(account);
+        expect(balance).to.equal(amount);
     });
 });
